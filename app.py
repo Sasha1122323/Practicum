@@ -9,21 +9,21 @@ def main():
 
     if 'привет' in command:
         text = 'Привет! Это навык ПРАКТИКУМ. Чем могу помочь?'
-    elif 'помощь' in command:
-        text = 'Я могу рассказать о практикуме и помочь начать занятия.'
-    elif 'пока' in command:
-        text = 'До встречи!'
     else:
         text = 'Я пока не понял тебя, попробуй сказать "помощь".'
 
     return jsonify({
         "version": "1.0",
-        "session": event["session"],
+        "session": event.get("session", {}),
         "response": {
             "text": text,
             "end_session": False
         }
     })
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
