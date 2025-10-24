@@ -85,14 +85,18 @@ def main():
             break
 
     # Пользователь выбрал блок
-    if selected_topic:
-        question = get_random_question(selected_topic)
-        response["response"]["text"] = (
-            f'Вы выбрали "{selected_topic}". Начнём тренировку.\n{question["Вопрос"]}\n'
-            f'Варианты:\n' + "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(question["Варианты"])])
-        )
-        response["session_state"] = {"topic": selected_topic, "question": question}
-        return jsonify(response)
+    # Пользователь выбрал тему (лист Excel)
+    clean_command = re.sub(r'^\d+\s*\.?\s*', '', command).strip()  # убираем "3 " или "3."
+    for sheet_name in sheet_names:
+        if clean_command.lower() == sheet_name.lower():
+            topic = sheet_name
+            question = get_random_question(topic)
+            response["response"]["text"] = (
+                f'Вы выбрали "{topic}". Начнём тренировку.\n{question["Вопрос"]}\n'
+                f'Варианты: {", ".join(question["Варианты"])}'
+            )
+            response["session_state"] = {"topic": topic, "question": question}
+            return jsonify(response)
 
     # Пользователь отвечает на вопрос
     if state.get("question"):
