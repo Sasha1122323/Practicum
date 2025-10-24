@@ -54,12 +54,12 @@ def get_random_question(topic):
 # ===============================
 # 🚀 ОСНОВНОЙ ВЕБХУК ДЛЯ АЛИСЫ
 # ===============================
-@app.route("/webhook", methods=["POST"])
-def webhook():
+@app.route("/", methods=["POST"])
+def main():
     req = request.json
     session = req.get("session", {})
     state = req.get("state", {}).get("session", {})
-    command = req["request"]["command"].strip().upper()
+    command = req["request"]["command"].strip()
 
     response = {
         "version": req["version"],
@@ -67,27 +67,34 @@ def webhook():
         "response": {"end_session": False}
     }
 
-    # 👋 Приветствие
+    # Создаём сопоставление цифра -> лист Excel
+    number_to_sheet = {str(i+1): name for i, name in enumerate(sheet_names)}
+
+    # Новая сессия — показываем блоки
     if session.get("new", False):
-        response["response"]["text"] = (
-            "Привет! Выберите блок, по которому хотите потренироваться:"
-        )
-        response["response"]["buttons"] = [{"title": name} for name in sheet_names]
+        buttons = [{"title": f"{i+1}. {name}"} for i, name in enumerate(sheet_names)]
+        response["response"]["text"] = "Привет! Выберите блок по номеру или названию:"
+        response["response"]["buttons"] = buttons
         return jsonify(response)
 
-    # 🧩 Пользователь выбрал тему
-    if command.capitalize() in sheet_names:
-        topic = command.capitalize()
-        question = get_random_question(topic)
+    # Определяем выбранный блок по номеру или названию
+    selected_topic = None
+    for i, name in enumerate(sheet_names):
+        if command == str(i+1) or command.lower() == name.lower():
+            selected_topic = name
+            break
+
+    # Пользователь выбрал блок
+    if selected_topic:
+        question = get_random_question(selected_topic)
         response["response"]["text"] = (
-            f'Вы выбрали "{topic}". Начнём тренировку.\n'
-            f'{question["Вопрос"]}\n'
-            f'Варианты: {", ".join(question["Варианты"])}'
+            f'Вы выбрали "{selected_topic}". Начнём тренировку.\n{question["Вопрос"]}\n'
+            f'Варианты:\n' + "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(question["Варианты"])])
         )
-        response["session_state"] = {"topic": topic, "question": question}
+        response["session_state"] = {"topic": selected_topic, "question": question}
         return jsonify(response)
 
-    # 🗣 Пользователь отвечает на вопрос
+    # Пользователь отвечает на вопрос
     if state.get("question"):
         topic = state["topic"]
         question = state["question"]
@@ -96,31 +103,31 @@ def webhook():
         # Разбираем ответ пользователя
         user_answers = re.findall(r'[А-ЯЁ]\)', command.upper())
         if not user_answers:
-            mapping = {str(i + 1): opt for i, opt in enumerate(question["Варианты"])}
+            # Если пользователь вводит цифру
+            mapping = {str(i+1): opt for i, opt in enumerate(question["Варианты"])}
             user_answers = [mapping.get(command.strip())] if mapping.get(command.strip()) else []
 
         if sorted(user_answers) == sorted(correct):
             next_q = get_random_question(topic)
             response["response"]["text"] = (
                 f"Верно! 🎉 Следующий вопрос:\n{next_q['Вопрос']}\n"
-                f'Варианты: {", ".join(next_q["Варианты"])}'
+                f'Варианты:\n' + "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(next_q["Варианты"])])
             )
             response["session_state"] = {"topic": topic, "question": next_q}
         else:
             response["response"]["text"] = (
-                f"Неверно 😢\nПравильный ответ: {', '.join(correct)}\n"
-                f"{question['Пояснение']}\n"
+                f"Неверно 😢\nПравильный ответ: {', '.join(correct)}\n{question['Пояснение']}\n"
                 "Выберите блок заново."
             )
-            response["response"]["buttons"] = [{"title": name} for name in sheet_names]
+            response["response"]["buttons"] = [{"title": f"{i+1}. {name}"} for i, name in enumerate(sheet_names)]
             response["session_state"] = {}
+
         return jsonify(response)
 
-    # ❓ Если команда непонятна
-    response["response"]["text"] = "Я не поняла. Выберите блок:"
-    response["response"]["buttons"] = [{"title": name} for name in sheet_names]
+    # Если команда непонятна
+    response["response"]["text"] = "Пожалуйста, выберите блок по номеру или названию."
+    response["response"]["buttons"] = [{"title": f"{i+1}. {name}"} for i, name in enumerate(sheet_names)]
     return jsonify(response)
-
 
 # ===============================
 # 🌐 ПРОВЕРОЧНЫЙ МАРШРУТ
