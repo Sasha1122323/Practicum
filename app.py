@@ -114,18 +114,35 @@ def main():
             response["session_state"] = {"topic": topic, "question": question}
             return jsonify(response)
 
-    # 4️⃣ Ответ на вопрос
+    # 4️⃣ Ответ на вопрос - ИСПРАВЛЕННАЯ ЛОГИКА
     if state.get("topic") and state.get("question"):
         topic = state["topic"]
         question = state["question"]
         correct_answers = [c.lower().replace(")", "").strip() for c in question["Правильный"]]
 
-        user_answer = command.replace(")", "").replace(".", "").strip().lower()
+        user_answer = command.strip().lower()
 
-        # поддержка цифр 1/2/3 → а/б/в
-        letter_map = {"1": "а", "2": "б", "3": "в", "4": "г", "5": "д"}
+        # поддержка разных форматов ответа
+        letter_map = {"1": "а", "2": "б", "3": "в", "4": "г", "5": "д", "6": "е"}
+
+        # Обработка ответов типа "а", "а)", "1", "1."
         if user_answer in letter_map:
             user_answer = letter_map[user_answer]
+        elif user_answer.endswith(')') and len(user_answer) == 2:
+            user_answer = user_answer[0]  # "а)" -> "а"
+        elif user_answer.endswith('.') and len(user_answer) == 2:
+            user_answer = user_answer[0]  # "а." -> "а"
+
+        # Убираем возможные точки и скобки
+        user_answer = user_answer.replace(')', '').replace('.', '').strip()
+
+        # Дополнительно: если ответ состоит только из русской буквы
+        if len(user_answer) == 1 and user_answer in 'абвгдежзийклмнопрстуфхцчшщъыьэюя':
+            # Оставляем как есть - это уже буква ответа
+            pass
+        else:
+            # Пытаемся извлечь первую букву если ответ длиннее
+            user_answer = user_answer[0] if user_answer else ""
 
         # проверяем правильность
         if user_answer in correct_answers:
