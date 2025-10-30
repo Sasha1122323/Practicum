@@ -75,23 +75,53 @@ def get_random_question(topic, previous_questions=None):
 
 
 def normalize_answer(user_answer):
+    """Нормализует ответ, принимает только цифры 1-6 и буквы а-е"""
     if not user_answer:
         return ""
+
     user_answer = user_answer.strip().lower()
+
+    # 🔥 ТОЛЬКО цифры 1-6
     digit_to_letter = {"1": "а", "2": "б", "3": "в", "4": "г", "5": "д", "6": "е"}
     if user_answer in digit_to_letter:
         return digit_to_letter[user_answer]
-    user_answer = re.sub(r'[).\s]', '', user_answer)
-    return user_answer[0] if user_answer else ""
+
+    # Удаляем скобки, точки, пробелы
+    user_answer = re.sub(r'[).\s,]', '', user_answer)
+
+    # 🔥 ТОЛЬКО первые 6 букв русского алфавита (а-е)
+    if user_answer and user_answer[0] in 'абвгде':
+        return user_answer[0]
+
+    return ""
 
 
 def normalize_correct_answers(correct_answers):
     normalized = []
     for answer in correct_answers:
         clean_answer = re.sub(r'[)\s]', '', answer).lower()
-        if clean_answer:
+        if clean_answer and clean_answer[0] in 'абвгде':
             normalized.append(clean_answer[0])
     return normalized
+
+
+def parse_multiple_answers(command):
+    """Парсит несколько ответов, принимает только валидные цифры/буквы"""
+    # Разделяем по пробелам, запятым, точкам
+    cleaned = re.sub(r'[.,;]', ' ', command.lower())
+    answers = cleaned.split()
+
+    normalized_answers = []
+    valid_answers = set()
+
+    for answer in answers:
+        normalized = normalize_answer(answer)
+        # 🔥 Добавляем только если это валидный ответ и его еще нет
+        if normalized and normalized not in valid_answers:
+            normalized_answers.append(normalized)
+            valid_answers.add(normalized)
+
+    return normalized_answers
 
 
 # 🔥 ВРЕМЕННОЕ ХРАНИЛИЩЕ ДЛЯ СЕССИЙ
@@ -146,14 +176,13 @@ def main():
         # 3️⃣ Помощь
         if command in ["помощь", "help", "что делать", "правила"]:
             if user_state.get("mode") == "question":
-                # Помощь в режиме вопроса
                 response["response"]["text"] = (
                     f"Вы в режиме вопроса по теме '{user_state['topic']}'. "
-                    f"Произнесите номер или букву ответа (например: '1', 'а', 'б'). "
+                    f"Произнесите номер ответа (1-6) или букву (А-Е). "
+                    f"Можно несколько ответов через пробел: '1 2' или 'а б'. "
                     f"Или скажите 'назад' для возврата в меню."
                 )
             else:
-                # Помощь в главном меню
                 response["response"]["text"] = (
                     "Я помогу вам подготовиться к экзамену! "
                     "Выберите тему для тестирования или скажите 'назад' в любой момент."
@@ -203,43 +232,47 @@ def main():
             current_question = user_state["question"]
             previous_questions = user_state.get("previous_questions", [])
 
-            logger.info(f"Обрабатываем ответ для темы '{topic}'")
+            logger.info(f"Обрабатываем ответ для темы '{topic}': '{command}'")
 
-            # Нормализуем ответ
-            user_answer_normalized = normalize_answer(command)
+            # 🔥 Парсим ответы
+            user_answers = parse_multiple_answers(command)
             correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
 
-            # Проверяем - если ответ не распознан как валидный (цифра или буква)
-            if not user_answer_normalized or user_answer_normalized not in 'абвгдежзийклмнопрстуфхцчшщъыьэюя':
+            # Проверяем - если ответ не распознан как валидный
+            if not user_answers:
                 response["response"]["text"] = (
-                    f"Не понял ваш ответ '{command}'. "
-                    f"Пожалуйста, выберите вариант ответа (1, 2, 3 или А, Б, В) "
-                    f"или скажите 'назад' для возврата в меню."
+                    f"Не понял ответ '{command}'. "
+                    f"Используйте цифры 1-6 или буквы А-Е. "
+                    f"Пример: '1', 'а', '1 2', 'а б'. "
+                    f"Или скажите 'назад' для возврата в меню."
                 )
                 response["response"]["buttons"] = [{"title": "Назад в меню"}]
-                # Сохраняем текущее состояние
                 user_sessions[session_id] = user_state
                 logger.info(f"Невалидный ответ: '{command}'")
                 return jsonify(response)
 
-            # Проверяем правильность ВАЛИДНОГО ответа
-            if user_answer_normalized in correct_answers_normalized:
+            # 🔥 ПРОВЕРКА ПРАВИЛЬНОСТИ ОТВЕТА
+            correct_given = [ans for ans in user_answers if ans in correct_answers_normalized]
+            incorrect_given = [ans for ans in user_answers if ans not in correct_answers_normalized]
+
+            if not incorrect_given and set(user_answers) == set(correct_answers_normalized):
+                # 🔥 ПРАВИЛЬНЫЙ ОТВЕТ - СРАЗУ СЛЕДУЮЩИЙ ВОПРОС
                 logger.info("✅ ОТВЕТ ПРАВИЛЬНЫЙ")
-                if len(correct_answers_normalized) > 1:
-                    remaining_answers = [ans for ans in correct_answers_normalized if ans != user_answer_normalized]
-                    if remaining_answers:
-                        remaining_text = ", ".join([f"{ans.upper()})" for ans in remaining_answers])
-                        text = f"✅ Частично верно! Вы выбрали правильный ответ {user_answer_normalized.upper()}), но есть еще правильные варианты: {remaining_text}\n\n{current_question['Пояснение']}"
-                    else:
-                        text = f"✅ Верно!\n\n{current_question['Пояснение']}"
-                else:
-                    text = f"✅ Верно!\n\n{current_question['Пояснение']}"
+                text = f"✅ Верно!"
+            elif not incorrect_given:
+                # Частично правильный
+                logger.info("🟡 ЧАСТИЧНО ПРАВИЛЬНЫЙ")
+                missing = [ans for ans in correct_answers_normalized if ans not in user_answers]
+                missing_text = ", ".join([f"{ans.upper()})" for ans in missing])
+                text = f"✅ Частично верно! Но есть еще правильные варианты: {missing_text}"
             else:
+                # Неправильный ответ
                 logger.info("❌ ОТВЕТ НЕПРАВИЛЬНЫЙ")
                 correct_text = ", ".join(current_question["Правильный"])
-                text = f"❌ Неверно.\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
+                incorrect_text = ", ".join([f"{ans.upper()})" for ans in incorrect_given])
+                text = f"❌ Неверно. Неправильные варианты: {incorrect_text}\nПравильный ответ: {correct_text}"
 
-            # Следующий вопрос
+            # 🔥 СЛЕДУЮЩИЙ ВОПРОС (ВСЕГДА, кроме случая когда вопросы закончились)
             next_question = get_random_question(topic, previous_questions)
             if next_question:
                 options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
