@@ -238,6 +238,9 @@ def main():
             user_answers = parse_multiple_answers(command)
             correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
 
+            logger.info(f"Распознанные ответы: {user_answers}")
+            logger.info(f"Правильные ответы: {correct_answers_normalized}")
+
             # Проверяем - если ответ не распознан как валидный
             if not user_answers:
                 response["response"]["text"] = (
@@ -251,26 +254,36 @@ def main():
                 logger.info(f"Невалидный ответ: '{command}'")
                 return jsonify(response)
 
-            # 🔥 ПРОВЕРКА ПРАВИЛЬНОСТИ ОТВЕТА
+            # 🔥 ПРОВЕРКА ПРАВИЛЬНОСТИ ОТВЕТА - ИСПРАВЛЕННАЯ ЛОГИКА
             correct_given = [ans for ans in user_answers if ans in correct_answers_normalized]
             incorrect_given = [ans for ans in user_answers if ans not in correct_answers_normalized]
 
-            if not incorrect_given and set(user_answers) == set(correct_answers_normalized):
-                # 🔥 ПРАВИЛЬНЫЙ ОТВЕТ - СРАЗУ СЛЕДУЮЩИЙ ВОПРОС
-                logger.info("✅ ОТВЕТ ПРАВИЛЬНЫЙ")
-                text = f"✅ Верно!"
-            elif not incorrect_given:
-                # Частично правильный
-                logger.info("🟡 ЧАСТИЧНО ПРАВИЛЬНЫЙ")
+            logger.info(f"Правильные из ответов: {correct_given}")
+            logger.info(f"Неправильные из ответов: {incorrect_given}")
+
+            # 🔥 ВАЖНО: Проверяем по отдельности каждый случай
+            if not incorrect_given and len(correct_given) == len(correct_answers_normalized):
+                # 🔥 ВСЕ ответы правильные и выбраны ВСЕ нужные
+                logger.info("✅ ВСЕ ОТВЕТЫ ПРАВИЛЬНЫЕ")
+                text = f"✅ Верно! Вы выбрали все правильные варианты."
+            elif not incorrect_given and len(correct_given) > 0:
+                # 🔥 ВЫБРАНЫ ТОЛЬКО ПРАВИЛЬНЫЕ ответы, но не все
+                logger.info("🟡 ЧАСТИЧНО ПРАВИЛЬНЫЙ - выбраны только правильные")
                 missing = [ans for ans in correct_answers_normalized if ans not in user_answers]
                 missing_text = ", ".join([f"{ans.upper()})" for ans in missing])
-                text = f"✅ Частично верно! Но есть еще правильные варианты: {missing_text}"
-            else:
-                # Неправильный ответ
-                logger.info("❌ ОТВЕТ НЕПРАВИЛЬНЫЙ")
-                correct_text = ", ".join(current_question["Правильный"])
+                text = f"✅ Частично верно! Вы выбрали правильные ответы, но не хватает: {missing_text}"
+            elif len(correct_given) > 0 and len(incorrect_given) > 0:
+                # 🔥 ЕСТЬ И ПРАВИЛЬНЫЕ И НЕПРАВИЛЬНЫЕ ответы
+                logger.info("🟡 СМЕШАННЫЙ ОТВЕТ - есть и правильные и неправильные")
+                correct_text = ", ".join([f"{ans.upper()})" for ans in correct_given])
                 incorrect_text = ", ".join([f"{ans.upper()})" for ans in incorrect_given])
-                text = f"❌ Неверно. Неправильные варианты: {incorrect_text}\nПравильный ответ: {correct_text}"
+                all_correct_text = ", ".join(current_question["Правильный"])
+                text = f"🟡 Частично верно! Правильные: {correct_text}, неправильные: {incorrect_text}\nПолностью правильный ответ: {all_correct_text}"
+            else:
+                # 🔥 ВСЕ ответы неправильные
+                logger.info("❌ ВСЕ ОТВЕТЫ НЕПРАВИЛЬНЫЕ")
+                correct_text = ", ".join(current_question["Правильный"])
+                text = f"❌ Неверно.\nПравильный ответ: {correct_text}"
 
             # 🔥 СЛЕДУЮЩИЙ ВОПРОС (ВСЕГДА, кроме случая когда вопросы закончились)
             next_question = get_random_question(topic, previous_questions)
