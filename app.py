@@ -4,7 +4,6 @@ import random
 import re
 import os
 import logging
-import json
 from datetime import datetime
 
 # Настройка логирования
@@ -60,10 +59,19 @@ for sheet_name in sheet_names:
     quizzes[sheet_name] = data
 
 
-def get_random_question(topic):
+def get_random_question(topic, previous_questions=None):
     if topic not in quizzes or not quizzes[topic]:
         return None
-    return random.choice(quizzes[topic])
+
+    if previous_questions is None:
+        previous_questions = []
+
+    available_questions = [q for q in quizzes[topic] if q["Вопрос"] not in previous_questions]
+
+    if not available_questions:
+        available_questions = quizzes[topic]
+
+    return random.choice(available_questions)
 
 
 def normalize_answer(user_answer):
@@ -86,18 +94,8 @@ def normalize_correct_answers(correct_answers):
     return normalized
 
 
-def parse_multiple_answers(command):
-    """Парсит несколько ответов из одной команды"""
-    cleaned = re.sub(r'[.,;]', ' ', command.lower())
-    answers = cleaned.split()
-
-    normalized_answers = []
-    for answer in answers:
-        normalized = normalize_answer(answer)
-        if normalized and normalized in 'абвгдежзийклмнопрстуфхцчшщъыьэюя':
-            normalized_answers.append(normalized)
-
-    return normalized_answers
+# 🔥 ВРЕМЕННОЕ ХРАНИЛИЩЕ ДЛЯ СЕССИЙ
+user_sessions = {}
 
 
 # ===============================
@@ -112,21 +110,24 @@ def main():
 
         command = req["request"]["command"].strip().lower()
         session = req.get("session", {})
+        session_id = session.get("session_id")
 
-        # 🔴 ВАЖНО: получаем state из session
-        state = req.get("state", {}).get("session", {})
+        logger.info(f"Получен запрос: команда='{command}', session_id={session_id}")
 
-        logger.info(f"Получен запрос: команда='{command}', session_id={session.get('session_id')}")
+        # 🔥 ПОЛУЧАЕМ СОСТОЯНИЕ ИЗ НАШЕГО ХРАНИЛИЩА
+        user_state = user_sessions.get(session_id, {})
 
         response = {
             "version": req["version"],
             "session": req["session"],
             "response": {"end_session": False, "text": "", "buttons": []},
-            "session_state": {}  # 🔴 ВАЖНО: используем session_state вместо user_state_update
+            "session_state": {}  # Пустой, т.к. используем свое хранилище
         }
 
         # 1️⃣ Новая сессия — приветствие
         if session.get("new", False):
+            # Очищаем состояние для новой сессии
+            user_sessions[session_id] = {}
             buttons = [{"title": name} for name in sheet_names]
             response["response"]["text"] = "Привет! 👋 Выберите тему для тестирования:"
             response["response"]["buttons"] = buttons
@@ -135,10 +136,11 @@ def main():
 
         # 2️⃣ Назад в меню
         if command in ["назад", "в меню", "меню", "главная"]:
+            # Очищаем состояние
+            user_sessions[session_id] = {}
             buttons = [{"title": name} for name in sheet_names]
             response["response"]["text"] = "Вы вернулись в главное меню. Выберите тему:"
             response["response"]["buttons"] = buttons
-            response["session_state"] = {}  # 🔴 Очищаем состояние
             logger.info("Возврат в меню")
             return jsonify(response)
 
@@ -167,61 +169,45 @@ def main():
                 response["response"]["text"] = response_text
                 response["response"]["buttons"] = [{"title": "Назад в меню"}]
 
-                # 🔴 ВАЖНО: Сохраняем состояние в session_state
-                response["session_state"] = {
+                # 🔥 СОХРАНЯЕМ СОСТОЯНИЕ В НАШЕ ХРАНИЛИЩЕ
+                user_sessions[session_id] = {
                     "topic": topic,
                     "question": question,
-                    "previous_questions": [question["Вопрос"]]
+                    "previous_questions": [question["Вопрос"]],
+                    "mode": "question"
                 }
 
-                logger.info(f"Выбрана тема '{topic}'")
+                logger.info(f"Выбрана тема '{topic}', сохранено состояние")
                 return jsonify(response)
 
-        # 4️⃣ Проверка на неизвестные команды в режиме вопроса
-        if state.get("topic") and state.get("question"):
-            # Если команда не является ответом (не цифра и не буква), обрабатываем как неизвестную
-            normalized_command = normalize_answer(command)
-            if not normalized_command or normalized_command not in 'абвгдежзийклмнопрстуфхцчшщъыьэюя':
-                response["response"]["text"] = (
-                    f"Вы находитесь в режиме вопроса по теме '{state['topic']}'. "
-                    f"Пожалуйста, выберите вариант ответа или скажите 'назад' для возврата в меню."
-                )
-                response["response"]["buttons"] = [{"title": "Назад в меню"}]
-                # Сохраняем текущее состояние
-                response["session_state"] = state
-                logger.info(f"Неизвестная команда в режиме вопроса: '{command}'")
-                return jsonify(response)
+        # 4️⃣ Ответ на вопрос - проверяем наше состояние
+        if user_state.get("mode") == "question" and user_state.get("topic") and user_state.get("question"):
+            topic = user_state["topic"]
+            current_question = user_state["question"]
+            previous_questions = user_state.get("previous_questions", [])
 
-        # 5️⃣ Ответ на вопрос
-        if state.get("topic") and state.get("question"):
-            topic = state["topic"]
-            current_question = state["question"]
-            previous_questions = state.get("previous_questions", [])
+            logger.info(f"Обрабатываем ответ для темы '{topic}'")
 
-            user_answers = parse_multiple_answers(command)
+            # Нормализуем ответы для сравнения
+            user_answer_normalized = normalize_answer(command)
             correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
 
-            if user_answers:
-                correct_given = [ans for ans in user_answers if ans in correct_answers_normalized]
-                incorrect_given = [ans for ans in user_answers if ans not in correct_answers_normalized]
-
-                if not incorrect_given and set(user_answers) == set(correct_answers_normalized):
-                    text = f"✅ Верно! Вы выбрали все правильные варианты: {', '.join(current_question['Правильный'])}\n\n{current_question['Пояснение']}"
-                    logger.info(f"Правильный ответ: {user_answers}")
-                elif not incorrect_given:
-                    missing = [ans for ans in correct_answers_normalized if ans not in user_answers]
-                    missing_text = ", ".join([f"{ans.upper()})" for ans in missing])
-                    text = f"✅ Частично верно! Вы выбрали правильные ответы, но не хватает: {missing_text}\n\n{current_question['Пояснение']}"
-                    logger.info(f"Частично правильный ответ: {user_answers}, не хватает: {missing}")
+            # Проверяем правильность ответа
+            if user_answer_normalized in correct_answers_normalized:
+                logger.info("✅ ОТВЕТ ПРАВИЛЬНЫЙ")
+                if len(correct_answers_normalized) > 1:
+                    remaining_answers = [ans for ans in correct_answers_normalized if ans != user_answer_normalized]
+                    if remaining_answers:
+                        remaining_text = ", ".join([f"{ans.upper()})" for ans in remaining_answers])
+                        text = f"✅ Частично верно! Вы выбрали правильный ответ {user_answer_normalized.upper()}), но есть еще правильные варианты: {remaining_text}\n\n{current_question['Пояснение']}"
+                    else:
+                        text = f"✅ Верно!\n\n{current_question['Пояснение']}"
                 else:
-                    correct_text = ", ".join(current_question["Правильный"])
-                    incorrect_text = ", ".join([f"{ans.upper()})" for ans in incorrect_given])
-                    text = f"❌ Неверно. Неправильные варианты: {incorrect_text}\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
-                    logger.info(f"Неправильный ответ: {user_answers}, правильные: {correct_answers_normalized}")
+                    text = f"✅ Верно!\n\n{current_question['Пояснение']}"
             else:
+                logger.info("❌ ОТВЕТ НЕПРАВИЛЬНЫЙ")
                 correct_text = ", ".join(current_question["Правильный"])
                 text = f"❌ Неверно.\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
-                logger.info(f"Не распознан ответ: '{command}'")
 
             # Следующий вопрос
             next_question = get_random_question(topic, previous_questions)
@@ -236,22 +222,36 @@ def main():
                 if len(text) > 1000:
                     text = text[:997] + "..."
 
-                # Обновляем историю вопросов
+                # 🔥 ОБНОВЛЯЕМ СОСТОЯНИЕ
                 updated_previous_questions = previous_questions + [next_question["Вопрос"]]
-                response["session_state"] = {
+                user_sessions[session_id] = {
                     "topic": topic,
                     "question": next_question,
-                    "previous_questions": updated_previous_questions
+                    "previous_questions": updated_previous_questions,
+                    "mode": "question"
                 }
+                logger.info("Сохранен следующий вопрос")
             else:
                 text += "\n\n🎉 Вопросы в этой теме закончились!"
-                response["session_state"] = {}
+                # Очищаем состояние
+                user_sessions[session_id] = {}
+                logger.info("Вопросы закончились, состояние очищено")
 
             response["response"]["text"] = text
             response["response"]["buttons"] = [{"title": "Назад в меню"}]
             return jsonify(response)
 
-        # 6️⃣ Если команда не распознана
+        # 5️⃣ Если команда не распознана и мы в режиме вопроса
+        if user_state.get("mode") == "question":
+            response["response"]["text"] = (
+                f"Вы находитесь в режиме вопроса по теме '{user_state['topic']}'. "
+                f"Пожалуйста, выберите вариант ответа (1, 2, 3 или А, Б, В) или скажите 'назад' для возврата в меню."
+            )
+            response["response"]["buttons"] = [{"title": "Назад в меню"}]
+            logger.info(f"Неизвестная команда в режиме вопроса: '{command}'")
+            return jsonify(response)
+
+        # 6️⃣ Если команда не распознана (главное меню)
         buttons = [{"title": name} for name in sheet_names]
         response["response"]["text"] = "Пожалуйста, выберите тему из предложенных ниже 👇"
         response["response"]["buttons"] = buttons
@@ -260,6 +260,8 @@ def main():
 
     except Exception as e:
         logger.error(f"Ошибка обработки запроса: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify_error(f"Произошла ошибка. Пожалуйста, попробуйте еще раз.")
 
 
@@ -268,7 +270,7 @@ def jsonify_error(message):
     return jsonify({
         "version": "1.0",
         "response": {"text": message, "end_session": False},
-        "session_state": {}  # 🔴 ВАЖНО: используем session_state
+        "session_state": {}
     })
 
 
@@ -277,14 +279,13 @@ def home():
     return jsonify({
         "status": "success",
         "message": "Навык Алисы работает!",
-        "topics_loaded": list(quizzes.keys()),
-        "questions_count": {topic: len(questions) for topic, questions in quizzes.items()}
+        "active_sessions": len(user_sessions),
+        "topics_loaded": list(quizzes.keys())
     })
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Эндпоинт для проверки здоровья приложения"""
     return jsonify({"status": "healthy", "timestamp": str(datetime.now())})
 
 
