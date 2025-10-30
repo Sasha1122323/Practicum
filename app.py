@@ -3,6 +3,12 @@ import openpyxl
 import random
 import re
 import os
+import logging
+from datetime import datetime
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -30,25 +36,9 @@ def parse_options(options_str):
 def parse_correct(correct_str):
     if not correct_str:
         return []
-    # Ищем все варианты типа "А)", "Б)", "В)" в тексте
     matches = re.findall(r'([А-ЯЁA-Z]\))', str(correct_str))
     return matches
 
-
-def parse_multiple_answers(command):
-    """Парсит несколько ответов из одной команды"""
-    # Удаляем лишние символы и разбиваем по пробелам/запятым
-    cleaned = re.sub(r'[.,;]', ' ', command.lower())
-    answers = cleaned.split()
-
-    # Нормализуем каждый ответ
-    normalized_answers = []
-    for answer in answers:
-        normalized = normalize_answer(answer)
-        if normalized and normalized in 'абвгдежзийклмнопрстуфхцчшщъыьэюя':
-            normalized_answers.append(normalized)
-
-    return normalized_answers
 
 quizzes = {}
 for sheet_name in sheet_names:
@@ -69,195 +59,257 @@ for sheet_name in sheet_names:
     quizzes[sheet_name] = data
 
 
-def get_random_question(topic, previous_questions=None):
-    """Получает случайный вопрос, исключая предыдущие"""
+def get_random_question(topic):
     if topic not in quizzes or not quizzes[topic]:
         return None
-
-    if previous_questions is None:
-        previous_questions = []
-
-    # Фильтруем вопросы, которые уже были
-    available_questions = [q for q in quizzes[topic] if q["Вопрос"] not in previous_questions]
-
-    # Если все вопросы использованы, начинаем заново
-    if not available_questions:
-        available_questions = quizzes[topic]
-
-    return random.choice(available_questions)
+    return random.choice(quizzes[topic])
 
 
 def normalize_answer(user_answer):
-    """Нормализует ответ пользователя к формату буквы без скобок"""
     if not user_answer:
         return ""
-
     user_answer = user_answer.strip().lower()
-
-    # Преобразование цифр в буквы
     digit_to_letter = {"1": "а", "2": "б", "3": "в", "4": "г", "5": "д", "6": "е"}
     if user_answer in digit_to_letter:
         return digit_to_letter[user_answer]
-
-    # Удаление скобок, точек и пробелов, оставляем только первую букву
     user_answer = re.sub(r'[).\s]', '', user_answer)
     return user_answer[0] if user_answer else ""
 
 
 def normalize_correct_answers(correct_answers):
-    """Нормализует правильные ответы к формату букв без скобок"""
     normalized = []
     for answer in correct_answers:
-        # Удаляем скобки и пробелы, переводим в нижний регистр
         clean_answer = re.sub(r'[)\s]', '', answer).lower()
         if clean_answer:
-            normalized.append(clean_answer[0])  # Берем только первую букву
+            normalized.append(clean_answer[0])
     return normalized
 
 
 # ===============================
-# 🚀 Основной Webhook
+# 🚀 Основной Webhook С ДИАГНОСТИКОЙ
 # ===============================
 @app.route("/", methods=["POST"])
 def main():
-    req = request.json
-    command = req["request"]["command"].strip().lower()
-    session = req.get("session", {})
+    # 🔴 ШАГ 1: ЗАПИСЫВАЕМ ВХОДЯЩИЙ ЗАПРОС
+    logger.info("=" * 80)
+    logger.info("🟢 ПОЛУЧЕН НОВЫЙ ЗАПРОС")
+    logger.info("=" * 80)
 
-    # ВАЖНО: используем user_state вместо session_state
-    state = req.get("state", {}).get("user", {})
+    try:
+        req = request.json
+        logger.info("📥 ВХОДЯЩИЙ JSON:")
+        logger.info(json.dumps(req, ensure_ascii=False, indent=2))
 
-    response = {
-        "version": req["version"],
-        "session": req["session"],
-        "response": {"end_session": False, "text": "", "buttons": []},
-        "user_state_update": {}  # Добавляем это для сохранения состояния
-    }
+        if not req:
+            logger.error("❌ ПУСТОЙ ЗАПРОС")
+            return jsonify_error("Пустой запрос")
 
-    # 1️⃣ Новая сессия — приветствие
-    if session.get("new", False):
-        buttons = [{"title": name} for name in sheet_names]
-        response["response"]["text"] = "Привет! 👋 Выберите тему для тестирования:"
-        response["response"]["buttons"] = buttons
-        return jsonify(response)
+        command = req["request"]["command"].strip().lower()
+        session = req.get("session", {})
+        state = req.get("state", {})
 
-    # 2️⃣ Назад в меню
-    if command in ["назад", "в меню", "меню", "главная"]:
-        buttons = [{"title": name} for name in sheet_names]
-        response["response"]["text"] = "Вы вернулись в главное меню. Выберите тему:"
-        response["response"]["buttons"] = buttons
-        response["user_state_update"] = {}  # Очищаем состояние
-        return jsonify(response)
+        # 🔴 ШАГ 2: ДИАГНОСТИКА ВСЕХ ПОЛЕЙ
+        logger.info("🔍 ДИАГНОСТИКА ПОЛЕЙ:")
+        logger.info(f"   Команда: '{command}'")
+        logger.info(f"   Session ID: {session.get('session_id')}")
+        logger.info(f"   New session: {session.get('new')}")
+        logger.info(f"   State keys: {list(state.keys())}")
 
-    # 3️⃣ Проверка выбора темы
-    for sheet_name in sheet_names:
-        if command == sheet_name.lower():
-            topic = sheet_name
-            question = get_random_question(topic)
-            if not question:
-                response["response"]["text"] = f"В теме '{topic}' нет вопросов."
+        # Проверяем разные варианты state
+        user_state = state.get("user", {})
+        session_state = state.get("session", {})
+        application_state = state.get("application", {})
+
+        logger.info(f"   user_state: {user_state}")
+        logger.info(f"   session_state: {session_state}")
+        logger.info(f"   application_state: {application_state}")
+
+        # 🔴 ШАГ 3: ПОДГОТОВКА ОТВЕТА
+        response = {
+            "version": req["version"],
+            "session": req["session"],
+            "response": {"end_session": False, "text": "", "buttons": []},
+            "user_state_update": {}
+        }
+
+        # 1️⃣ Новая сессия — приветствие
+        if session.get("new", False):
+            logger.info("🎯 ОБРАБОТКА: Новая сессия")
+            buttons = [{"title": name} for name in sheet_names]
+            response["response"]["text"] = "Привет! 👋 Выберите тему для тестирования:"
+            response["response"]["buttons"] = buttons
+            logger.info("📤 ОТВЕТ: Приветствие с выбором тем")
+            return jsonify(response)
+
+        # 2️⃣ Назад в меню
+        if command in ["назад", "в меню", "меню", "главная"]:
+            logger.info("🎯 ОБРАБОТКА: Возврат в меню")
+            buttons = [{"title": name} for name in sheet_names]
+            response["response"]["text"] = "Вы вернулись в главное меню. Выберите тему:"
+            response["response"]["buttons"] = buttons
+            response["user_state_update"] = {}
+            logger.info("📤 ОТВЕТ: Главное меню")
+            return jsonify(response)
+
+        # 3️⃣ Проверка выбора темы
+        for sheet_name in sheet_names:
+            if command == sheet_name.lower():
+                logger.info(f"🎯 ОБРАБОТКА: Выбор темы '{sheet_name}'")
+                topic = sheet_name
+                question = get_random_question(topic)
+                if not question:
+                    response["response"]["text"] = f"В теме '{topic}' нет вопросов."
+                    response["response"]["buttons"] = [{"title": "Назад в меню"}]
+                    logger.warning(f"📤 ОТВЕТ: Нет вопросов в теме '{topic}'")
+                    return jsonify(response)
+
+                options_text = "\n".join([f"{opt}" for opt in question["Варианты"]]) if question["Варианты"] else ""
+                response_text = (
+                    f'Тема: "{topic}"\n\n'
+                    f'{question["Вопрос"]}\n\n'
+                    f'{options_text}'
+                )
+
+                # Обрезаем если слишком длинный
+                if len(response_text) > 1000:
+                    response_text = response_text[:997] + "..."
+
+                response["response"]["text"] = response_text
                 response["response"]["buttons"] = [{"title": "Назад в меню"}]
+
+                # 🔴 ВАЖНО: Сохраняем состояние
+                response["user_state_update"] = {
+                    "topic": topic,
+                    "question": question,
+                    "previous_questions": [question["Вопрос"]]
+                }
+
+                logger.info(f"📤 ОТВЕТ: Вопрос по теме '{topic}'")
+                logger.info(f"💾 СОХРАНЯЕМ STATE: topic={topic}, question_id={question['Вопрос'][:30]}...")
                 return jsonify(response)
 
-            options_text = "\n".join([f"{opt}" for opt in question["Варианты"]]) if question["Варианты"] else ""
-            response["response"]["text"] = (
-                f'Тема: "{topic}"\n\n'
-                f'{question["Вопрос"]}\n\n'
-                f'{options_text}'
-            )
-            response["response"]["buttons"] = [{"title": "Назад в меню"}]
-            # Сохраняем в user_state_update
-            response["user_state_update"] = {
-                "topic": topic,
-                "question": question,
-                "previous_questions": [question["Вопрос"]]  # Сохраняем историю вопросов
-            }
-            return jsonify(response)
+        # 🔴 ШАГ 4: ПРОВЕРЯЕМ СОСТОЯНИЕ ДЛЯ ОТВЕТА НА ВОПРОС
+        logger.info("🔍 ПРОВЕРКА STATE ДЛЯ ОТВЕТА:")
 
-    # 4️⃣ Проверка на неизвестные команды в режиме вопроса
-    if state.get("topic") and state.get("question"):
-        # Список явно недопустимых команд в режиме вопроса
-        invalid_commands = ["помощь", "help", "что делать", "правила", "инструкция"]
+        # Пробуем разные варианты state
+        current_state = user_state  # сначала пробуем user
+        state_source = "user_state"
 
-        if command in invalid_commands:
-            response["response"]["text"] = (
-                f"Вы находитесь в режиме вопроса по теме '{state['topic']}'. "
-                f"Пожалуйста, выберите вариант ответа или скажите 'назад' для возврата в меню."
-            )
-            response["response"]["buttons"] = [{"title": "Назад в меню"}]
-            # Сохраняем текущее состояние
-            response["user_state_update"] = state
-            return jsonify(response)
+        if not current_state.get("topic") or not current_state.get("question"):
+            current_state = session_state  # пробуем session
+            state_source = "session_state"
 
-    # 5️⃣ Ответ на вопрос - проверяем user_state
-    # 5️⃣ Ответ на вопрос - проверяем user_state
-    if state.get("topic") and state.get("question"):
-        topic = state["topic"]
-        current_question = state["question"]
-        previous_questions = state.get("previous_questions", [])
+        if not current_state.get("topic") or not current_state.get("question"):
+            current_state = application_state  # пробуем application
+            state_source = "application_state"
 
-        # Нормализуем ответы для сравнения
-        user_answers = parse_multiple_answers(command)  # Теперь получаем список ответов!
-        correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
+        if not current_state.get("topic") or not current_state.get("question"):
+            current_state = state  # пробуем корневой state
+            state_source = "root_state"
 
-        # Проверяем правильность ответов
-        if user_answers:
-            # Проверяем какие ответы правильные, а какие нет
-            correct_given = [ans for ans in user_answers if ans in correct_answers_normalized]
-            incorrect_given = [ans for ans in user_answers if ans not in correct_answers_normalized]
+        logger.info(f"   Используем state из: {state_source}")
+        logger.info(f"   topic: {current_state.get('topic')}")
+        logger.info(f"   has_question: {'question' in current_state}")
 
-            if not incorrect_given and set(user_answers) == set(correct_answers_normalized):
-                # Все ответы правильные и выбраны все нужные
-                text = f"✅ Верно! Вы выбрали все правильные варианты: {', '.join(current_question['Правильный'])}\n\n{current_question['Пояснение']}"
-            elif not incorrect_given:
-                # Все выбранные ответы правильные, но не все нужные выбраны
-                missing = [ans for ans in correct_answers_normalized if ans not in user_answers]
-                missing_text = ", ".join([f"{ans.upper()})" for ans in missing])
-                text = f"✅ Частично верно! Вы выбрали правильные ответы, но не хватает: {missing_text}\n\n{current_question['Пояснение']}"
+        # 4️⃣ Ответ на вопрос
+        if current_state.get("topic") and current_state.get("question"):
+            logger.info("🎯 ОБРАБОТКА: Ответ на вопрос")
+
+            topic = current_state["topic"]
+            current_question = current_state["question"]
+            previous_questions = current_state.get("previous_questions", [])
+
+            logger.info(f"   Тема: {topic}")
+            logger.info(f"   Вопрос: {current_question['Вопрос'][:50]}...")
+            logger.info(f"   Ответ пользователя: '{command}'")
+
+            # Нормализуем ответы для сравнения
+            user_answer_normalized = normalize_answer(command)
+            correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
+
+            logger.info(f"   Нормализованный ответ: '{user_answer_normalized}'")
+            logger.info(f"   Правильные ответы: {correct_answers_normalized}")
+
+            # Проверяем правильность ответа
+            if user_answer_normalized in correct_answers_normalized:
+                logger.info("✅ ОТВЕТ ПРАВИЛЬНЫЙ")
+                if len(correct_answers_normalized) > 1:
+                    remaining_answers = [ans for ans in correct_answers_normalized if ans != user_answer_normalized]
+                    if remaining_answers:
+                        remaining_text = ", ".join([f"{ans.upper()})" for ans in remaining_answers])
+                        text = f"✅ Частично верно! Вы выбрали правильный ответ {user_answer_normalized.upper()}), но есть еще правильные варианты: {remaining_text}\n\n{current_question['Пояснение']}"
+                    else:
+                        text = f"✅ Верно!\n\n{current_question['Пояснение']}"
+                else:
+                    text = f"✅ Верно!\n\n{current_question['Пояснение']}"
             else:
-                # Есть неправильные ответы
+                logger.info("❌ ОТВЕТ НЕПРАВИЛЬНЫЙ")
                 correct_text = ", ".join(current_question["Правильный"])
-                incorrect_text = ", ".join([f"{ans.upper()})" for ans in incorrect_given])
-                text = f"❌ Неверно. Неправильные варианты: {incorrect_text}\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
-        else:
-            # Не распознано ни одного ответа
-            correct_text = ", ".join(current_question["Правильный"])
-            text = f"❌ Неверно.\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
+                text = f"❌ Неверно.\n\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
 
-        # Следующий вопрос (остальное без изменений)
-        next_question = get_random_question(topic, previous_questions)
-        if next_question:
-            options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
-                "Варианты"] else ""
-            text += (
-                f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
-                f"{options_text}"
-            )
-            updated_previous_questions = previous_questions + [next_question["Вопрос"]]
-            response["user_state_update"] = {
-                "topic": topic,
-                "question": next_question,
-                "previous_questions": updated_previous_questions
-            }
-        else:
-            text += "\n\n🎉 Вопросы в этой теме закончились!"
-            response["user_state_update"] = {}
+            # Следующий вопрос
+            next_question = get_random_question(topic, previous_questions)
+            if next_question:
+                options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
+                    "Варианты"] else ""
+                text += (
+                    f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
+                    f"{options_text}"
+                )
+                # Обрезаем если слишком длинный
+                if len(text) > 1000:
+                    text = text[:997] + "..."
 
-        response["response"]["text"] = text
-        response["response"]["buttons"] = [{"title": "Назад в меню"}]
+                # Обновляем историю вопросов
+                updated_previous_questions = previous_questions + [next_question["Вопрос"]]
+                response["user_state_update"] = {
+                    "topic": topic,
+                    "question": next_question,
+                    "previous_questions": updated_previous_questions
+                }
+                logger.info("💾 СОХРАНЯЕМ STATE: следующий вопрос")
+            else:
+                text += "\n\n🎉 Вопросы в этой теме закончились!"
+                response["user_state_update"] = {}
+                logger.info("💾 ОЧИЩАЕМ STATE: вопросы закончились")
+
+            response["response"]["text"] = text
+            response["response"]["buttons"] = [{"title": "Назад в меню"}]
+            logger.info("📤 ОТВЕТ: Результат проверки ответа")
+            return jsonify(response)
+        else:
+            logger.warning("❌ STATE НЕ НАЙДЕН: не могу обработать ответ на вопрос")
+
+        # 5️⃣ Если команда не распознана
+        logger.info("🎯 ОБРАБОТКА: Неизвестная команда")
+        buttons = [{"title": name} for name in sheet_names]
+        response["response"]["text"] = "Пожалуйста, выберите тему из предложенных ниже 👇"
+        response["response"]["buttons"] = buttons
+        logger.info("📤 ОТВЕТ: Предложение выбрать тему")
         return jsonify(response)
-    # 6️⃣ Если команда не распознана
-    buttons = [{"title": name} for name in sheet_names]
-    response["response"]["text"] = "Пожалуйста, выберите тему из предложенных ниже 👇"
-    response["response"]["buttons"] = buttons
-    return jsonify(response)
+
+    except Exception as e:
+        logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify_error(f"Произошла ошибка: {e}")
 
 
-# Проверка на GET
+def jsonify_error(message):
+    """Формирует ответ с ошибкой"""
+    return jsonify({
+        "version": "1.0",
+        "response": {"text": message, "end_session": False},
+        "user_state_update": {}
+    })
+
+
 @app.route("/", methods=["GET"])
 def home():
-    return "Навык Алисы работает!", 200
+    return "Навык Алисы работает! 🚀", 200
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"🚀 ЗАПУСК СЕРВЕРА НА ПОРТУ {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
