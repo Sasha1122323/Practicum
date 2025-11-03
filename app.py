@@ -75,21 +75,17 @@ def get_random_question(topic, previous_questions=None):
 
 
 def normalize_answer(user_answer):
-    """Нормализует ответ, принимает только цифры 1-6 и буквы а-е"""
     if not user_answer:
         return ""
 
     user_answer = user_answer.strip().lower()
 
-    # 🔥 ТОЛЬКО цифры 1-6
     digit_to_letter = {"1": "а", "2": "б", "3": "в", "4": "г", "5": "д", "6": "е"}
     if user_answer in digit_to_letter:
         return digit_to_letter[user_answer]
 
-    # Удаляем скобки, точки, пробелы
     user_answer = re.sub(r'[).\s,]', '', user_answer)
 
-    # 🔥 ТОЛЬКО первые 6 букв русского алфавита (а-е)
     if user_answer and user_answer[0] in 'абвгде':
         return user_answer[0]
 
@@ -106,8 +102,6 @@ def normalize_correct_answers(correct_answers):
 
 
 def parse_multiple_answers(command):
-    """Парсит несколько ответов, принимает только валидные цифры/буквы"""
-    # Разделяем по пробелам, запятым, точкам
     cleaned = re.sub(r'[.,;]', ' ', command.lower())
     answers = cleaned.split()
 
@@ -116,7 +110,6 @@ def parse_multiple_answers(command):
 
     for answer in answers:
         normalized = normalize_answer(answer)
-        # 🔥 Добавляем только если это валидный ответ и его еще нет
         if normalized and normalized not in valid_answers:
             normalized_answers.append(normalized)
             valid_answers.add(normalized)
@@ -124,7 +117,7 @@ def parse_multiple_answers(command):
     return normalized_answers
 
 
-# 🔥 ВРЕМЕННОЕ ХРАНИЛИЩЕ ДЛЯ СЕССИЙ
+# Временное хранилище сессий
 user_sessions = {}
 
 
@@ -144,7 +137,6 @@ def main():
 
         logger.info(f"Получен запрос: команда='{command}', session_id={session_id}")
 
-        # 🔥 ПОЛУЧАЕМ СОСТОЯНИЕ ИЗ НАШЕГО ХРАНИЛИЩА
         user_state = user_sessions.get(session_id, {})
 
         response = {
@@ -154,17 +146,16 @@ def main():
             "session_state": {}
         }
 
-        # 1️⃣ Новая сессия — приветствие
+        # Новая сессия — приветствие
         if session.get("new", False):
             user_sessions[session_id] = {}
             buttons = [{"title": name} for name in sheet_names]
-            response["response"]["text"] = "Привет! 👋 Выберите тему для тестирования:"
+            response["response"]["text"] = "Привет! Выберите тему для тестирования:"
             response["response"]["buttons"] = buttons
             logger.info("Новая сессия: отправлено приветствие")
             return jsonify(response)
 
-        # 🔴 ВАЖНО: ПЕРВОЕ - проверка команд навигации
-        # 2️⃣ Назад в меню (разные варианты команды)
+        # Назад в меню
         if any(nav_cmd in command for nav_cmd in ["назад", "меню", "главная", "выход"]):
             user_sessions[session_id] = {}
             buttons = [{"title": name} for name in sheet_names]
@@ -173,7 +164,7 @@ def main():
             logger.info("Возврат в меню")
             return jsonify(response)
 
-        # 3️⃣ Помощь
+        # Помощь
         if command in ["помощь", "help", "что делать", "правила"]:
             if user_state.get("mode") == "question":
                 response["response"]["text"] = (
@@ -184,14 +175,14 @@ def main():
                 )
             else:
                 response["response"]["text"] = (
-                    "Я помогу вам подготовиться к экзамену! "
+                    "Я помогу вам подготовиться к экзамену. "
                     "Выберите тему для тестирования или скажите 'назад' в любой момент."
                 )
             response["response"]["buttons"] = [{"title": "Назад в меню"}]
             logger.info("Показана помощь")
             return jsonify(response)
 
-        # 4️⃣ Проверка выбора темы
+        # Проверка выбора темы
         for sheet_name in sheet_names:
             if command == sheet_name.lower():
                 topic = sheet_name
@@ -215,7 +206,6 @@ def main():
                 response["response"]["text"] = response_text
                 response["response"]["buttons"] = [{"title": "Назад в меню"}]
 
-                # 🔥 СОХРАНЯЕМ СОСТОЯНИЕ
                 user_sessions[session_id] = {
                     "topic": topic,
                     "question": question,
@@ -226,7 +216,7 @@ def main():
                 logger.info(f"Выбрана тема '{topic}', сохранено состояние")
                 return jsonify(response)
 
-        # 5️⃣ Ответ на вопрос - проверяем наше состояние
+        # Ответ на вопрос
         if user_state.get("mode") == "question" and user_state.get("topic") and user_state.get("question"):
             topic = user_state["topic"]
             current_question = user_state["question"]
@@ -234,14 +224,12 @@ def main():
 
             logger.info(f"Обрабатываем ответ для темы '{topic}': '{command}'")
 
-            # 🔥 Парсим ответы
             user_answers = parse_multiple_answers(command)
             correct_answers_normalized = normalize_correct_answers(current_question["Правильный"])
 
             logger.info(f"Распознанные ответы: {user_answers}")
             logger.info(f"Правильные ответы: {correct_answers_normalized}")
 
-            # Проверяем - если ответ не распознан как валидный
             if not user_answers:
                 response["response"]["text"] = (
                     f"Не понял ответ '{command}'. "
@@ -251,45 +239,28 @@ def main():
                 )
                 response["response"]["buttons"] = [{"title": "Назад в меню"}]
                 user_sessions[session_id] = user_state
-                logger.info(f"Невалидный ответ: '{command}'")
                 return jsonify(response)
 
-            # 🔥 ПРОВЕРКА ПРАВИЛЬНОСТИ ОТВЕТА
             correct_given = [ans for ans in user_answers if ans in correct_answers_normalized]
             incorrect_given = [ans for ans in user_answers if ans not in correct_answers_normalized]
 
-            logger.info(f"Правильные из ответов: {correct_given}")
-            logger.info(f"Неправильные из ответов: {incorrect_given}")
-
-            # 🔥 ВАЖНО: Проверяем по отдельности каждый случай
             if not incorrect_given and len(correct_given) == len(correct_answers_normalized):
-                # 🔥 ВСЕ ответы правильные и выбраны ВСЕ нужные - БЕЗ ПОЯСНЕНИЯ
-                logger.info("✅ ВСЕ ОТВЕТЫ ПРАВИЛЬНЫЕ")
-                text = f"✅ Верно!"
+                text = "Верно!"
             elif not incorrect_given and len(correct_given) > 0:
-                # 🔥 ВЫБРАНЫ ТОЛЬКО ПРАВИЛЬНЫЕ ответы, но не все - С ПОЯСНЕНИЕМ
-                logger.info("🟡 ЧАСТИЧНО ПРАВИЛЬНЫЙ - выбраны только правильные")
                 missing = [ans for ans in correct_answers_normalized if ans not in user_answers]
                 missing_text = ", ".join([f"{ans.upper()})" for ans in missing])
-                text = f"✅ Частично верно! Вы выбрали правильные ответы, но не хватает: {missing_text}\n\n{current_question['Пояснение']}"
+                text = f"Частично верно! Вы выбрали правильные ответы, но не хватает: {missing_text}\n\n{current_question['Пояснение']}"
             elif len(correct_given) > 0 and len(incorrect_given) > 0:
-                # 🔥 ЕСТЬ И ПРАВИЛЬНЫЕ И НЕПРАВИЛЬНЫЕ ответы - С ПОЯСНЕНИЕМ
-                logger.info("🟡 СМЕШАННЫЙ ОТВЕТ - есть и правильные и неправильные")
                 correct_text = ", ".join([f"{ans.upper()})" for ans in correct_given])
                 incorrect_text = ", ".join([f"{ans.upper()})" for ans in incorrect_given])
-                all_correct_text = ", ".join(current_question["Правильный"])
-                text = f"🟡 Частично верно! Правильные: {correct_text}, неправильные: {incorrect_text}\n\n{current_question['Пояснение']}"
+                text = f"Частично верно! Правильные: {correct_text}, неправильные: {incorrect_text}\n\n{current_question['Пояснение']}"
             else:
-                # 🔥 ВСЕ ответы неправильные - С ПОЯСНЕНИЕМ
-                logger.info("❌ ВСЕ ОТВЕТЫ НЕПРАВИЛЬНЫЕ")
                 correct_text = ", ".join(current_question["Правильный"])
-                text = f"❌ Неверно.\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
+                text = f"Неверно.\nПравильный ответ: {correct_text}\n\n{current_question['Пояснение']}"
 
-            # 🔥 СЛЕДУЮЩИЙ ВОПРОС (ВСЕГДА, кроме случая когда вопросы закончились)
             next_question = get_random_question(topic, previous_questions)
             if next_question:
-                options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
-                    "Варианты"] else ""
+                options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question["Варианты"] else ""
                 text += (
                     f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
                     f"{options_text}"
@@ -297,7 +268,6 @@ def main():
                 if len(text) > 1000:
                     text = text[:997] + "..."
 
-                # 🔥 ОБНОВЛЯЕМ СОСТОЯНИЕ
                 updated_previous_questions = previous_questions + [next_question["Вопрос"]]
                 user_sessions[session_id] = {
                     "topic": topic,
@@ -305,28 +275,25 @@ def main():
                     "previous_questions": updated_previous_questions,
                     "mode": "question"
                 }
-                logger.info("Сохранен следующий вопрос")
             else:
-                text += "\n\n🎉 Вопросы в этой теме закончились!"
+                text += "\n\nВопросы в этой теме закончились."
                 user_sessions[session_id] = {}
-                logger.info("Вопросы закончились, состояние очищено")
 
             response["response"]["text"] = text
             response["response"]["buttons"] = [{"title": "Назад в меню"}]
             return jsonify(response)
 
-        # 6️⃣ Если команда не распознана
+        # Если команда не распознана
         buttons = [{"title": name} for name in sheet_names]
-        response["response"]["text"] = "Пожалуйста, выберите тему из предложенных ниже 👇"
+        response["response"]["text"] = "Пожалуйста, выберите тему из предложенных ниже."
         response["response"]["buttons"] = buttons
-        logger.info(f"Не распознана команда: '{command}'")
         return jsonify(response)
 
     except Exception as e:
         logger.error(f"Ошибка обработки запроса: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return jsonify_error(f"Произошла ошибка. Пожалуйста, попробуйте еще раз.")
+        return jsonify_error("Произошла ошибка. Пожалуйста, попробуйте еще раз.")
 
 
 def jsonify_error(message):
@@ -341,7 +308,7 @@ def jsonify_error(message):
 def home():
     return jsonify({
         "status": "success",
-        "message": "Навык Алисы работает!",
+        "message": "Навык Алисы работает.",
         "active_sessions": len(user_sessions),
         "topics_loaded": list(quizzes.keys())
     })
@@ -349,5 +316,5 @@ def home():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🚀 ЗАПУСК СЕРВЕРА НА ПОРТУ {port}")
+    logger.info(f"Запуск сервера на порту {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
