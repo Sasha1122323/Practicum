@@ -164,6 +164,46 @@ def main():
             logger.info("Возврат в меню")
             return jsonify(response)
 
+        # Пропуск вопроса
+        if any(skip_cmd in command for skip_cmd in ["пропустить", "следующий", "дальше", "skip", "next"]):
+            if user_state.get("mode") == "question" and user_state.get("topic"):
+                topic = user_state["topic"]
+                previous_questions = user_state.get("previous_questions", [])
+
+                next_question = get_random_question(topic, previous_questions)
+                if next_question:
+                    options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
+                        "Варианты"] else ""
+                    response_text = (
+                        f"Вопрос пропущен.\n\n"
+                        f'Тема: "{topic}"\n\n'
+                        f'{next_question["Вопрос"]}\n\n'
+                        f'{options_text}'
+                    )
+
+                    if len(response_text) > 1000:
+                        response_text = response_text[:997] + "..."
+
+                    response["response"]["text"] = response_text
+
+                    updated_previous_questions = previous_questions + [next_question["Вопрос"]]
+                    user_sessions[session_id] = {
+                        "topic": topic,
+                        "question": next_question,
+                        "previous_questions": updated_previous_questions,
+                        "mode": "question"
+                    }
+                else:
+                    response["response"]["text"] = "Вопросы в этой теме закончились."
+                    user_sessions[session_id] = {}
+
+                response["response"]["buttons"] = [
+                    {"title": "Пропустить"},
+                    {"title": "Назад в меню"}
+                ]
+                logger.info("Вопрос пропущен")
+                return jsonify(response)
+
         # Помощь
         if command in ["помощь", "help", "что делать", "правила"]:
             if user_state.get("mode") == "question":
@@ -171,12 +211,14 @@ def main():
                     f"Вы в режиме вопроса по теме '{user_state['topic']}'. "
                     f"Произнесите номер ответа (1-6) или букву (А-Е). "
                     f"Можно несколько ответов через пробел: '1 2' или 'а б'. "
+                    f"Скажите 'пропустить' для перехода к следующему вопросу. "
                     f"Или скажите 'назад' для возврата в меню."
                 )
             else:
                 response["response"]["text"] = (
                     "Я помогу вам подготовиться к экзамену. "
-                    "Выберите тему для тестирования или скажите 'назад' в любой момент."
+                    "Выберите тему для тестирования или скажите 'назад' в любой момент. "
+                    "Во время тестирования можно пропускать вопросы командой 'пропустить'."
                 )
             response["response"]["buttons"] = [{"title": "Назад в меню"}]
             logger.info("Показана помощь")
@@ -204,7 +246,10 @@ def main():
                     response_text = response_text[:997] + "..."
 
                 response["response"]["text"] = response_text
-                response["response"]["buttons"] = [{"title": "Назад в меню"}]
+                response["response"]["buttons"] = [
+                    {"title": "Пропустить"},
+                    {"title": "Назад в меню"}
+                ]
 
                 user_sessions[session_id] = {
                     "topic": topic,
@@ -235,9 +280,13 @@ def main():
                     f"Не понял ответ '{command}'. "
                     f"Используйте цифры 1-6 или буквы А-Е. "
                     f"Пример: '1', 'а', '1 2', 'а б'. "
+                    f"Скажите 'пропустить' для перехода к следующему вопросу. "
                     f"Или скажите 'назад' для возврата в меню."
                 )
-                response["response"]["buttons"] = [{"title": "Назад в меню"}]
+                response["response"]["buttons"] = [
+                    {"title": "Пропустить"},
+                    {"title": "Назад в меню"}
+                ]
                 user_sessions[session_id] = user_state
                 return jsonify(response)
 
@@ -260,7 +309,8 @@ def main():
 
             next_question = get_random_question(topic, previous_questions)
             if next_question:
-                options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question["Варианты"] else ""
+                options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
+                    "Варианты"] else ""
                 text += (
                     f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
                     f"{options_text}"
@@ -280,7 +330,10 @@ def main():
                 user_sessions[session_id] = {}
 
             response["response"]["text"] = text
-            response["response"]["buttons"] = [{"title": "Назад в меню"}]
+            response["response"]["buttons"] = [
+                {"title": "Пропустить"},
+                {"title": "Назад в меню"}
+            ]
             return jsonify(response)
 
         # Если команда не распознана
