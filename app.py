@@ -23,6 +23,14 @@ if not os.path.exists(excel_path):
 workbook = openpyxl.load_workbook(excel_path)
 sheet_names = workbook.sheetnames
 
+# 🖼️ Словарь с ID картинок из каталога Алисы
+ALICE_IMAGE_IDS = {
+    "1": "997614/f3e84f7cd524f792e0c3",  # ВАША КАРТИНКА - вставлена сюда!
+    # Добавьте другие картинки:
+    # "2": "ваш_id_2",
+    # "3": "ваш_id_3", ...
+}
+
 
 # ===============================
 # 🔹 Подготовка базы вопросов
@@ -40,22 +48,11 @@ def parse_correct(correct_str):
     return matches
 
 
-def get_image_url(image_name):
-    """Получить URL картинки"""
+def get_alice_image_id(image_name):
+    """Получить ID картинки из каталога Алисы"""
     if not image_name:
         return None
-
-    image_name = str(image_name).strip()
-
-    # Тестовая картинка - для названия "1" используем нашу тестовую ссылку
-    if image_name == "1":
-        return "https://drive.google.com/uc?export=view&id=1EOZw6hIZkoh5uwZrhSNd0lX-fxJ1kcgD"
-
-    # Для остальных картинок можно добавить по аналогии
-    # if image_name == "2":
-    #     return "https://drive.google.com/uc?export=view&id=ВАШ_ID_2"
-
-    return None
+    return ALICE_IMAGE_IDS.get(str(image_name).strip())
 
 
 quizzes = {}
@@ -65,19 +62,18 @@ for sheet_name in sheet_names:
     for row in sheet.iter_rows(min_row=2, values_only=True):
         if all(cell is None for cell in row):
             continue
-        # 5 колонок: вопрос, варианты, правильный, пояснение, изображение
         question, options, correct, explanation, image = (row + (None, None, None, None, None))[:5]
         if not question:
             continue
 
-        image_url = get_image_url(image)
+        alice_image_id = get_alice_image_id(image)
 
         data.append({
             "Вопрос": str(question).strip(),
             "Варианты": parse_options(options),
             "Правильный": parse_correct(correct),
             "Пояснение": str(explanation).strip() if explanation else "",
-            "Изображение": image_url
+            "Изображение": alice_image_id
         })
     quizzes[sheet_name] = data
 
