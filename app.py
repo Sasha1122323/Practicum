@@ -5,6 +5,7 @@ import re
 import os
 import logging
 from datetime import datetime
+import base64
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,6 +24,10 @@ if not os.path.exists(excel_path):
 workbook = openpyxl.load_workbook(excel_path)
 sheet_names = workbook.sheetnames
 
+# 📁 Папка для изображений
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
 
 # ===============================
 # 🔹 Подготовка базы вопросов
@@ -40,6 +45,53 @@ def parse_correct(correct_str):
     return matches
 
 
+def get_image_path(image_name):
+    """Получить путь к изображению"""
+    if not image_name:
+        return None
+
+    # Поддерживаемые форматы
+    extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    image_name = image_name.strip()
+
+    # Проверяем разные расширения
+    for ext in extensions:
+        image_path = os.path.join(IMAGES_DIR, image_name + ext)
+        if os.path.exists(image_path):
+            return image_path
+        image_path = os.path.join(IMAGES_DIR, image_name)
+        if os.path.exists(image_path):
+            return image_path
+
+    return None
+
+
+def image_to_base64(image_path):
+    """Конвертировать изображение в base64"""
+    if not image_path or not os.path.exists(image_path):
+        return None
+
+    try:
+        with open(image_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+
+        # Определяем MIME тип по расширению
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_types = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp'
+        }
+        mime_type = mime_types.get(ext, 'image/jpeg')
+
+        return f"data:{mime_type};base64,{encoded_string}"
+    except Exception as e:
+        logger.error(f"Ошибка конвертации изображения {image_path}: {e}")
+        return None
+
+
 quizzes = {}
 for sheet_name in sheet_names:
     sheet = workbook[sheet_name]
@@ -47,14 +99,25 @@ for sheet_name in sheet_names:
     for row in sheet.iter_rows(min_row=2, values_only=True):
         if all(cell is None for cell in row):
             continue
-        question, options, correct, explanation = (row + (None, None, None, None))[:4]
+        # Теперь 5 колонок: вопрос, варианты, правильный, пояснение, изображение
+        question, options, correct, explanation, image = (row + (None, None, None, None, None))[:5]
         if not question:
             continue
+
+        # Проверяем наличие изображения
+        image_data = None
+        if image:
+            image_path = get_image_path(str(image).strip())
+            if image_path:
+                image_data = image_to_base64(image_path)
+                logger.info(f"Загружено изображение: {image} -> {image_path}")
+
         data.append({
             "Вопрос": str(question).strip(),
             "Варианты": parse_options(options),
             "Правильный": parse_correct(correct),
-            "Пояснение": str(explanation).strip() if explanation else ""
+            "Пояснение": str(explanation).strip() if explanation else "",
+            "Изображение": image_data  # Добавляем изображение в данные вопроса
         })
     quizzes[sheet_name] = data
 
@@ -186,6 +249,15 @@ def main():
 
                     response["response"]["text"] = response_text
 
+                    # Добавляем изображение если есть
+                    if next_question["Изображение"]:
+                        response["response"]["card"] = {
+                            "type": "BigImage",
+                            "image_id": next_question["Изображение"],
+                            "title": "Вопрос с изображением",
+                            "description": f"Тема: {topic}"
+                        }
+
                     updated_previous_questions = previous_questions + [next_question["Вопрос"]]
                     user_sessions[session_id] = {
                         "topic": topic,
@@ -246,6 +318,16 @@ def main():
                     response_text = response_text[:997] + "..."
 
                 response["response"]["text"] = response_text
+
+                # Добавляем изображение если есть
+                if question["Изображение"]:
+                    response["response"]["card"] = {
+                        "type": "BigImage",
+                        "image_id": question["Изображение"],
+                        "title": "Вопрос с изображением",
+                        "description": f"Тема: {topic}"
+                    }
+
                 response["response"]["buttons"] = [
                     {"title": "Пропустить"},
                     {"title": "Назад в меню"}
@@ -317,6 +399,17 @@ def main():
                 )
                 if len(text) > 1000:
                     text = text[:997] + "..."
+
+                # Добавляем изображение для следующего вопроса если есть
+                if next_question["Изображение"]:
+                    if "card" not in response["response"]:
+                        response["response"]["card"] = {}
+                    response["response"]["card"] = {
+                        "type": "BigImage",
+                        "image_id": next_question["Изображение"],
+                        "title": "Следующий вопрос",
+                        "description": f"Тема: {topic}"
+                    }
 
                 updated_previous_questions = previous_questions + [next_question["Вопрос"]]
                 user_sessions[session_id] = {
