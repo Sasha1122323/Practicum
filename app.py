@@ -193,26 +193,26 @@ def main():
                 if next_question:
                     options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
                         "Варианты"] else ""
-                    response_text = (
-                        f"Вопрос пропущен.\n\n"
-                        f'Тема: "{topic}"\n\n'
-                        f'{next_question["Вопрос"]}\n\n'
-                        f'{options_text}'
-                    )
 
-                    if len(response_text) > 1000:
-                        response_text = response_text[:997] + "..."
-
-                    response["response"]["text"] = response_text
-
-                    # Добавляем картинку если есть
+                    # Сначала картинка (если есть), потом текст вопроса
                     if next_question["Изображение"]:
                         response["response"]["card"] = {
                             "type": "BigImage",
                             "image_id": next_question["Изображение"],
-                            "title": "Изображение к вопросу",
-                            "description": f"Тема: {topic}"
+                            "title": f"Тема: {topic}",
+                            "description": f"{next_question['Вопрос']}\n\n{options_text}"
                         }
+                        response["response"]["text"] = f"Вопрос пропущен. Смотрите картинку с вопросом выше."
+                    else:
+                        response_text = (
+                            f"Вопрос пропущен.\n\n"
+                            f'Тема: "{topic}"\n\n'
+                            f'{next_question["Вопрос"]}\n\n'
+                            f'{options_text}'
+                        )
+                        if len(response_text) > 1000:
+                            response_text = response_text[:997] + "..."
+                        response["response"]["text"] = response_text
 
                     updated_previous_questions = previous_questions + [next_question["Вопрос"]]
                     user_sessions[session_id] = {
@@ -264,25 +264,28 @@ def main():
                     return jsonify(response)
 
                 options_text = "\n".join([f"{opt}" for opt in question["Варианты"]]) if question["Варианты"] else ""
-                response_text = (
-                    f'Тема: "{topic}"\n\n'
-                    f'{question["Вопрос"]}\n\n'
-                    f'{options_text}'
-                )
 
-                if len(response_text) > 1000:
-                    response_text = response_text[:997] + "..."
-
-                response["response"]["text"] = response_text
-
-                # Добавляем картинку если есть
+                # ЛОГИЧНЫЙ ПОРЯДОК: сначала картинка, потом вопрос
                 if question["Изображение"]:
+                    # Картинка с описанием (вопрос и варианты)
                     response["response"]["card"] = {
                         "type": "BigImage",
                         "image_id": question["Изображение"],
-                        "title": "Изображение к вопросу",
-                        "description": f"Тема: {topic}"
+                        "title": f"Тема: {topic}",
+                        "description": f"{question['Вопрос']}\n\n{options_text}"
                     }
+                    # Текст для голосового ответа
+                    response["response"]["text"] = f"Смотрите вопрос на картинке. {question['Вопрос']}"
+                else:
+                    # Если картинки нет - обычный текст
+                    response_text = (
+                        f'Тема: "{topic}"\n\n'
+                        f'{question["Вопрос"]}\n\n'
+                        f'{options_text}'
+                    )
+                    if len(response_text) > 1000:
+                        response_text = response_text[:997] + "..."
+                    response["response"]["text"] = response_text
 
                 response["response"]["buttons"] = [
                     {"title": "Пропустить"},
@@ -349,21 +352,24 @@ def main():
             if next_question:
                 options_text = "\n".join([f"{opt}" for opt in next_question["Варианты"]]) if next_question[
                     "Варианты"] else ""
-                text += (
-                    f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
-                    f"{options_text}"
-                )
-                if len(text) > 1000:
-                    text = text[:997] + "..."
 
-                # Добавляем картинку для следующего вопроса если есть
+                # Для следующего вопроса тоже показываем картинку сверху
                 if next_question["Изображение"]:
                     response["response"]["card"] = {
                         "type": "BigImage",
                         "image_id": next_question["Изображение"],
-                        "title": "Изображение к вопросу",
-                        "description": f"Тема: {topic}"
+                        "title": f"Тема: {topic}",
+                        "description": f"{next_question['Вопрос']}\n\n{options_text}"
                     }
+                    text += f"\n\nСледующий вопрос: смотрите на картинке выше."
+                else:
+                    text += (
+                        f"\n\nСледующий вопрос:\n{next_question['Вопрос']}\n\n"
+                        f"{options_text}"
+                    )
+
+                if len(text) > 1000:
+                    text = text[:997] + "..."
 
                 updated_previous_questions = previous_questions + [next_question["Вопрос"]]
                 user_sessions[session_id] = {
